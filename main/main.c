@@ -2,59 +2,83 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "driver/i2c_master.h"
-#include "display.h"
-#include "axp2101.h"
-
-i2c_master_bus_handle_t bus_handle;
-uint16_t battery_voltage_mv = 0;
-
-void init_i2c_bus()
-{
-    i2c_master_bus_config_t bus_config = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = (gpio_num_t)15,
-        .scl_io_num = (gpio_num_t)14,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags = {
-            .enable_internal_pullup = true,
-        }};
-
-    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &bus_handle));
-}
+#include "pcf85063a.h"
+#include "bsp/esp-bsp.h" // Donanım destek paketi
+#include "bsp/display.h" // Ekran kontrolleri
+#include "lvgl.h"        // Grafik kütüphanesi
 
 static const char *TAG = "SAAT";
 
+static pcf85063a_dev_t rtc_dev;
+pcf85063a_datetime_t now_time;
+static lv_obj_t *time_label;
+
+void update_time_task(void *pvParameters)
+{
+    while (1)
+    {
+        if (pcf85063a_get_time_date(&rtc_dev, &now_time) == ESP_OK)
+        {
+            bsp_display_lock(0); //
+            lv_label_set_text_fmt(time_label, "%02d:%02d:%02d",
+                                  now_time.hour, now_time.min, now_time.sec);
+            bsp_display_unlock(); //
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Sistem başlatılıyor");
-    init_i2c_bus();
-    ESP_LOGI(TAG, "I2C bus başlatıldı");
-    ESP_ERROR_CHECK(axp2101_init(bus_handle));
-    ESP_LOGI(TAG, "AXP2101 PMU başlatıldı");
-    display_hardware_reset();
+    ESP_LOGI(TAG, "Sistem BSP ile başlatılıyor...");
+    /* 1. Donanım ve Ekran Başlatma */
+    // Bu fonksiyon I2C, AXP2101 ve SH8601 sürücüsünü otomatik kurar
+    bsp_display_start();
+    /* 2. Parlaklık Ayarı */
+    bsp_display_brightness_set(100);
 
-    ESP_ERROR_CHECK(display_init());
+    /* 3. LVGL Arayüzü Oluşturma */
+    // LVGL işlemlerini yaparken mutlaka kilitleme (lock) kullanmalısın
+    bsp_display_lock(0);
 
-    ESP_LOGI("SAAT", "Donanım hazır, QSPI hattına geçilebilir.");
+    i2c_master_bus_handle_t bus_handle = bsp_i2c_get_handle(); // Mevcut bus handle'ı buraya almalısın
+    // RTC'yi başlat (Adres genelde 0x51'dir)
+    pcf85063a_init(&rtc_dev, bus_handle, PCF85063A_ADDRESS);
 
-    ESP_LOGI("SAAT", "Ekrana renk basiliyor...");
-    display_fill_color(0xF800);
+    lv_obj_t *scr = lv_scr_act();
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0); // Siyah arka plan
+
+    time_label = lv_label_create(scr);
+    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(time_label, lv_color_hex(0x00FF00), 0);
+    lv_obj_center(time_label);
+    bsp_display_unlock();
+
+    // Saati bir kereliğine ayarlıyoruz
+    pcf85063a_datetime_t time_to_set = {
+        .year = 2026,
+        .month = 1,
+        .day = 31,
+        .hour = 19,
+        .min = 00,
+        .sec = 0};
+    esp_err_t set_ret = pcf85063a_set_time_date(&rtc_dev, time_to_set);
+    if (set_ret == ESP_OK)
+    {
+        ESP_LOGI("RTC", "Saat basariyla 19:00:00 olarak ayarlandi.");
+    }
+
+    // 4. Görevi Başlat
+    xTaskCreate(update_time_task, "update_time", 4096, NULL, 5, NULL);
+
+    ESP_LOGI(TAG, "Arayüz yüklendi.");
 
     while (1)
     {
-        ESP_LOGI(TAG, "Saat çalışıyor");
-
-        esp_err_t ret = axp2101_get_battery_voltage(&battery_voltage_mv);
-        if (ret == ESP_OK)
-        {
-            ESP_LOGI(TAG, "Pil Voltajı: %d mV", battery_voltage_mv);
-        }
-        else
-        {
-            ESP_LOGE(TAG, "Pil voltajı okunamadı: %s", esp_err_to_name(ret));
-        }
+        // Not: Pil voltajı okumak için BSP'nin kendi PMU fonksiyonlarını
+        // veya I2C bus handle'ını kullanabilirsin.
+        ESP_LOGI(TAG, "Guncel Saat: %02d:%02d:%02d",
+                 now_time.hour, now_time.min, now_time.sec);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

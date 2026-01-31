@@ -67,7 +67,7 @@ esp_err_t display_init(void)
         .spi_mode = 0,
         .pclk_hz = 40 * 1000 * 1000, // 40MHz hız
         .trans_queue_depth = 10,
-        .lcd_cmd_bits = 8,
+        .lcd_cmd_bits = 32,
         .lcd_param_bits = 8,
         .flags = {
             .quad_mode = true, // Quad SPI olduğunu belirtiyoruz
@@ -75,12 +75,19 @@ esp_err_t display_init(void)
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST, &io_config, &io_handle));
 
+    sh8601_vendor_config_t vendor_config = {
+        .flags = {
+            .use_qspi_interface = 1, // Sürücüye QSPI modunda olduğunu söyle
+        },
+    };
+
     ESP_LOGI(TAG, "Panel sürücüsü oluşturuluyor...");
 
     esp_lcd_panel_dev_config_t panel_config = {
         .reset_gpio_num = -1, // Reset işlemini manuel yaptığımız için -1
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16, // RGB565 formatı
+        .vendor_config = &vendor_config,
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_sh8601(io_handle, &panel_config, &panel_handle));
 
@@ -91,6 +98,9 @@ esp_err_t display_init(void)
     // AMOLED spesifik uykudan çıkış süresi
     vTaskDelay(pdMS_TO_TICKS(120));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+
+    uint8_t brightness_val = 0xFF;
+    ESP_ERROR_CHECK(esp_lcd_panel_io_tx_param(io_handle, 0x51, &brightness_val, 1));
 
     ESP_LOGI(TAG, "QSPI hatti basariyla kuruldu.");
     return ESP_OK;
@@ -104,16 +114,19 @@ esp_err_t display_fill_color(uint16_t color)
     int width = 454;
     int height = 454;
 
-    // DMA uyumlu bellek ayıralım
-    uint16_t *buffer = (uint16_t *)heap_caps_malloc(width * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-
+    // RGB565 için Byte swapping gerekebilir
     uint16_t swapped_color = (color << 8) | (color >> 8);
-    for (int i = 0; i < width; i++)
+
+    // Tüm ekranı boyamak için DMA uyumlu buffer kullan
+    uint16_t *buffer = (uint16_t *)heap_caps_malloc(width * 20 * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    for (int i = 0; i < width * 20; i++)
         buffer[i] = swapped_color;
 
-    for (int y = 0; y < height; y++)
+    for (int y = 0; y < height; y += 20)
     {
-        esp_lcd_panel_draw_bitmap(panel_handle, 0, y, width, y + 1, buffer);
+        int h = (y + 20 > height) ? (height - y) : 20;
+        // Sürücü artık QSPI paketlerini otomatik halledecek
+        esp_lcd_panel_draw_bitmap(panel_handle, 0, y, width, y + h, buffer);
     }
 
     free(buffer);
