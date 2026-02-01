@@ -24,6 +24,19 @@ extern "C"
      */
     esp_err_t axp2101_get_battery_voltage(uint16_t *voltage_mv);
 
+    /**
+     * @brief Get battery percentage from AXP2101
+     * @param percent Pointer to store battery percentage (0-100)
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t axp2101_get_battery_percentage(uint8_t *percent);
+
+    /**
+     * @brief Get charge status from AXP2101
+     * @return Charge status value (0: not charging, 1: charging, 2: full, 3: error)
+     */
+    uint8_t axp2101_get_charge_status(void);
+
 #ifdef __cplusplus
 }
 #endif

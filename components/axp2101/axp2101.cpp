@@ -1,64 +1,66 @@
 #include "axp2101.h"
+#include "esp_log.h"
 
-i2c_master_dev_handle_t dev_handle;
+static i2c_master_dev_handle_t dev_handle;
 static const char *TAG = "AXP2101";
 
+// 1. DÜZENLEME: Sadece cihazı kayıt et ve ADC'yi kontrol et
 esp_err_t axp2101_init(i2c_master_bus_handle_t bus_handle)
 {
     i2c_device_config_t dev_config = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = 0x34,
+        .device_address = 0x34, // AXP2101 Standart Adresi
         .scl_speed_hz = 100000,
     };
 
-    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_config, &dev_handle));
+    // Cihazı mevcut I2C hattına ekle
+    esp_err_t ret = i2c_master_bus_add_device(bus_handle, &dev_config, &dev_handle);
+    if (ret != ESP_OK)
+        return ret;
 
+    // Sadece ADC'yi aktif et (Pil okumak için gereklidir)
+    // Register 0x80: ADC enable
     uint8_t adc_en_data[] = {0x80, 0x03};
-    i2c_master_transmit(dev_handle, adc_en_data, sizeof(adc_en_data), -1);
-
-    // 3. Voltaj Seviyelerini Ayarla (Ekran için)
-    // Register 0x93: ALDO2 Voltajı (0x1C = 3.3V)
-    uint8_t aldo2_vol[] = {0x93, 0x1C};
-    i2c_master_transmit(dev_handle, aldo2_vol, 2, -1);
-
-    // Register 0x96: BLDO1 Voltajı (0x0D = 1.8V)
-    uint8_t bldo1_vol[] = {0x96, 0x0D};
-    i2c_master_transmit(dev_handle, bldo1_vol, 2, -1);
-
-    // Register 0x99: DLDO1 Voltajı (0x1C = 3.3V)
-    uint8_t dldo1_vol[] = {0x99, 0x1C};
-    i2c_master_transmit(dev_handle, dldo1_vol, 2, -1);
-
-    // 4. Kanalları Aktif Et (Power Enable)
-    // Register 0x90: LDO ve DC-DC kanallarını açma/kapama
-    // 0xBF değeri ALDO1, ALDO2, BLDO1, DLDO1 ve DC-DC'leri açar
-    uint8_t pwr_en[] = {0x90, 0xBF};
-    esp_err_t ret = i2c_master_transmit(dev_handle, pwr_en, 2, -1);
-
-    if (ret == ESP_OK)
-    {
-        ESP_LOGI(TAG, "ADC aktif edildi.");
-    }
-
-    return ret;
+    return i2c_master_transmit(dev_handle, adc_en_data, sizeof(adc_en_data), -1);
 }
 
+// 2. DÜZENLEME: Pil Voltajı Okuma (Register 0x34-0x35)
 esp_err_t axp2101_get_battery_voltage(uint16_t *voltage_mv)
 {
-    if (voltage_mv == NULL)
-        return ESP_ERR_INVALID_ARG;
-
     uint8_t reg_addr = 0x34;
     uint8_t read_buf[2];
 
-    esp_err_t ret = i2c_master_transmit_receive(dev_handle, &reg_addr, 1, read_buf, 2, 1000 / portTICK_PERIOD_MS);
-    if (ret != ESP_OK)
+    esp_err_t ret = i2c_master_transmit_receive(dev_handle, &reg_addr, 1, read_buf, 2, 1000);
+    if (ret == ESP_OK)
     {
-        ESP_LOGE(TAG, "Failed to read battery voltage : %s", esp_err_to_name(ret));
-        return ret;
+        // AXP2101 için 14-bit voltaj hesaplaması: (MSB << 6) | (LSB & 0x3F)
+        // Çarpan genelde 1mV'dur.
+        *voltage_mv = (read_buf[0] << 6) | (read_buf[1] & 0x3F);
     }
+    return ret;
+}
 
-    uint16_t raw_voltage = (read_buf[0] << 6) | (read_buf[1] & 0x3F);
-    *voltage_mv = raw_voltage;
-    return ESP_OK;
+// 3. YENİ: Pil Yüzdesi Okuma (Register 0xA1)
+esp_err_t axp2101_get_battery_percentage(uint8_t *percent)
+{
+    uint8_t reg_addr = 0xA4; // Fuel Gauge register
+    uint8_t val;
+    esp_err_t ret = i2c_master_transmit_receive(dev_handle, &reg_addr, 1, &val, 1, 1000);
+    if (ret == ESP_OK)
+    {
+        *percent = (val); // 0-100 arası değer döner
+    }
+    return ret;
+}
+
+uint8_t axp2101_get_charge_status(void)
+{
+    uint8_t reg_addr = 0x01; // XPOWERS_AXP2101_STATUS2
+    uint8_t val;
+    if (i2c_master_transmit_receive(dev_handle, &reg_addr, 1, &val, 1, 1000) == ESP_OK)
+    {
+        // Bit 5 ve 6'yı kontrol ediyoruz (xpowerlib'deki >> 5 mantığı)
+        return (val >> 5) & 0x03;
+    }
+    return 3;
 }
