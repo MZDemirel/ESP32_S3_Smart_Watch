@@ -14,13 +14,13 @@ void update_ui_task(void *pvParameters)
 {
     pcf85063a_datetime_t now;
     uint8_t bat_per = 0;
-    uint8_t charge_status = axp2101_get_charge_status();
 
     while (1)
     {
         // 1. Verileri donanımdan oku
         esp_err_t rtc_ret = pcf85063a_get_time_date(&rtc_dev, &now);
         esp_err_t bat_ret = axp2101_get_battery_percentage(&bat_per);
+        uint8_t charge_status = axp2101_get_charge_status();
 
         // 2. UI Kilidini aç ve etiketleri güncelle
         bsp_display_lock(0);

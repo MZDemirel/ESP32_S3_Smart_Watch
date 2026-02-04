@@ -16,5 +16,6 @@
     "--query-driver=**",
     "--compile-commands-dir=/home/mzd/Documents/My_Project/Akıllı Saat/ESP23-S3_smart_watch/build"
   ],
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "idf.currentSetup": "/home/mzd/esp/v5.4.2/esp-idf"
 }

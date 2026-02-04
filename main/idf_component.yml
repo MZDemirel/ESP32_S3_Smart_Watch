@@ -6,3 +6,5 @@ dependencies:
     version: "9.2.0"
     public: true
   waveshare/pcf85063a: "*"
+  waveshare/qmi8658:
+    version: "*"
